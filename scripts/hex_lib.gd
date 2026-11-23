@@ -1,7 +1,19 @@
 extends RefCounted
 class_name HexLib
 
-const SIZE := 72.0
+const SIZE := 90.0
+## Radio visual del terreno (el lattice de vértices sigue en SIZE).
+## Deja un canal uniforme entre hexágonos para rutas y casas.
+const TILE_INSET := 8.0
+
+static func tile_radius() -> float:
+	return SIZE - TILE_INSET
+
+static func apothem() -> float:
+	return SIZE * sqrt(3.0) * 0.5
+
+static func neighbor_distance() -> float:
+	return SIZE * sqrt(3.0)
 
 static func hex_to_pixel(q: int, r: int) -> Vector2:
 	var x := SIZE * sqrt(3.0) * (float(q) + float(r) * 0.5)
@@ -9,8 +21,11 @@ static func hex_to_pixel(q: int, r: int) -> Vector2:
 	return Vector2(x, y)
 
 static func corner(center: Vector2, i: int) -> Vector2:
+	return corner_at(center, i, SIZE)
+
+static func corner_at(center: Vector2, i: int, radius: float) -> Vector2:
 	var angle := deg_to_rad(60.0 * float(i) - 30.0)
-	return center + Vector2(cos(angle), sin(angle)) * SIZE
+	return center + Vector2(cos(angle), sin(angle)) * radius
 
 static func pips(number: int) -> int:
 	match number:

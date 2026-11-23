@@ -1,0 +1,5 @@
+Lucide Icons (https://lucide.dev)
+License: ISC / MIT-compatible — https://lucide.dev/license
+Downloaded via lucide-static npm package for local use in Lindero.
+Icons used: panel-top-open, hand, hammer, arrow-left-right, check, dices,
+feather, x, play, book-open, refresh-cw, house.

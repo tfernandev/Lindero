@@ -4,24 +4,26 @@ class_name LinderoMatch
 const HexGeom := preload("res://scripts/hex_lib.gd")
 
 # Partida corta, original. Hexágonos, dados y construcción.
-# Cuatro materias primas. Las granjas pagan mercancías y con eso
-# se sube la tabla: Taller, Mercado y Consejo.
+# Cinco primas (madera, arcilla, trigo, piedra, lana). Las granjas pagan
+# mercancías y con eso se sube la tabla: Taller, Mercado y Consejo.
 # Meta: 5 puntos. Puesto = 1, granja = 2, sede del Consejo = 1.
+# Costos de construcción siguen en las cuatro primas clásicas (sin lana).
 
 enum Phase { SETUP_SETTLEMENT, SETUP_ROAD, ROLL, BUILD, OVER }
-enum Goods { WOOD, CLAY, GRAIN, STONE }
+enum Goods { WOOD, CLAY, GRAIN, STONE, SHEEP }
 enum Ware { PAPER, CLOTH, COIN }
 enum Track { TALLER, MERCADO, CONSEJO }
 
 const WIN := 5
 const PLAYER_NAME := ["Vos", "Vecino"]
-const RES_NAME := ["Madera", "Arcilla", "Grano", "Piedra"]
-const RES_LETTER := ["M", "A", "G", "P"]
+const RES_NAME := ["Madera", "Arcilla", "Trigo", "Piedra", "Lana"]
+const RES_LETTER := ["M", "A", "T", "P", "L"]
 const RES_COLOR := [
 	Color("2f7a3e"),
 	Color("b85a32"),
 	Color("d4a437"),
 	Color("7e8288"),
+	Color("c9b896"),
 ]
 const WARE_NAME := ["Papel", "Tela", "Moneda"]
 const WARE_LETTER := ["Pa", "Te", "Mo"]
@@ -34,8 +36,10 @@ const PERK_SHORT := [
 	["Licencia", "Fuero", "Sede"],
 ]
 const PROG_COST := [1, 2, 3]
-# Madera → papel, grano → tela, piedra → moneda. La arcilla no tiene mercancía.
-const WARE_OF_RES := [0, -1, 1, 2]
+# Madera → papel, trigo → tela, piedra → moneda, lana → tela. Arcilla sin mercancía.
+const WARE_OF_RES := [0, -1, 1, 2, 1]
+const RES_COUNT := 5
+const HAND_EMPTY := [0, 0, 0, 0, 0]
 const PLAYER_COLOR := [Color("e39b3b"), Color("3d6fdb")]
 const LAGOON := Color("2c6f86")
 const COST := {
@@ -47,7 +51,7 @@ const SETUP_PLAYER := [0, 1, 1, 0]
 const SETUP_GRANT := [false, false, true, true]
 const TILE_DEF := {
 	"-2,0": [0, 6],
-	"-2,1": [2, 3],
+	"-2,1": [4, 3],
 	"-2,2": [3, 8],
 	"-1,-1": [1, 4],
 	"-1,0": [2, 5],
@@ -59,7 +63,7 @@ const TILE_DEF := {
 	"0,1": [3, 5],
 	"0,2": [2, 4],
 	"1,-2": [1, 8],
-	"1,-1": [2, 11],
+	"1,-1": [4, 11],
 	"1,0": [0, 3],
 	"1,1": [1, 6],
 	"2,-2": [3, 11],
@@ -77,7 +81,7 @@ var forced_roll := 0
 var anchor := -1
 var setup_index := 0
 var scores: Array = [0, 0]
-var hands: Array = [[0, 0, 0, 0], [0, 0, 0, 0]]
+var hands: Array = [HAND_EMPTY.duplicate(), HAND_EMPTY.duplicate()]
 var wares: Array = [[0, 0, 0], [0, 0, 0]]
 var progress: Array = [[0, 0, 0], [0, 0, 0]]
 var log: Array[String] = []
@@ -100,7 +104,7 @@ func new_game() -> void:
 	anchor = -1
 	setup_index = 0
 	scores = [0, 0]
-	hands = [[0, 0, 0, 0], [0, 0, 0, 0]]
+	hands = [HAND_EMPTY.duplicate(), HAND_EMPTY.duplicate()]
 	wares = [[0, 0, 0], [0, 0, 0]]
 	progress = [[0, 0, 0], [0, 0, 0]]
 	log.clear()
@@ -166,7 +170,7 @@ func cost_of(player: int, kind: String) -> Array:
 
 func fmt_cost(cost: Array) -> String:
 	var bits: PackedStringArray = []
-	for i in 4:
+	for i in cost.size():
 		var n := int(cost[i])
 		if n <= 0:
 			continue
@@ -180,7 +184,7 @@ func fmt_cost(cost: Array) -> String:
 
 func can_afford(player: int, kind: String) -> bool:
 	var cost := cost_of(player, kind)
-	for i in 4:
+	for i in cost.size():
 		if int(hands[player][i]) < int(cost[i]):
 			return false
 	return true
@@ -345,6 +349,8 @@ func produce(number: int) -> void:
 		if int(h.number) != number or int(h.resource) < 0:
 			continue
 		var res := int(h.resource)
+		if res < 0 or res >= RES_COUNT:
+			continue
 		for v in h.vertices:
 			var vi := int(v)
 			if not buildings.has(vi):
@@ -395,7 +401,7 @@ func trade(player: int, give: int, take: int, ware: bool) -> String:
 	if ware and mercado < 3:
 		return "Las mercancías se cambian con la Lonja, en Mercado 3."
 	var pile: Array = wares if ware else hands
-	var n := 3 if ware else 4
+	var n := 3 if ware else RES_COUNT
 	if give < 0 or take < 0 or give >= n or take >= n:
 		return "Elegí qué das y qué querés."
 	if give == take:
@@ -515,7 +521,7 @@ func vertex_value(vkey: int, player: int) -> float:
 	for hi in v_hexes[vkey]:
 		var h: Dictionary = hexes[int(hi)]
 		var res := int(h.resource)
-		if res < 0:
+		if res < 0 or res >= RES_COUNT:
 			continue
 		value += float(HexGeom.pips(int(h.number)))
 		if int(WARE_OF_RES[res]) >= 0:
@@ -586,7 +592,7 @@ func _edge_key(a: int, b: int) -> String:
 
 func _pay(player: int, kind: String) -> void:
 	var cost := cost_of(player, kind)
-	for i in 4:
+	for i in cost.size():
 		hands[player][i] = int(hands[player][i]) - int(cost[i])
 
 func _advance_setup(player: int) -> void:
@@ -603,7 +609,7 @@ func _advance_setup(player: int) -> void:
 			hands[p][Goods.STONE] = int(hands[p][Goods.STONE]) + 1
 		phase = Phase.ROLL
 		current_player = 0
-		say("Reserva: 2 madera, 2 arcilla, 1 grano y 1 piedra.")
+		say("Reserva: 2 madera, 2 arcilla, 1 trigo y 1 piedra.")
 		return
 	current_player = SETUP_PLAYER[setup_index]
 	phase = Phase.SETUP_SETTLEMENT
@@ -613,7 +619,7 @@ func _grant_vertex(player: int, vkey: int) -> void:
 		return
 	for hi in v_hexes[vkey]:
 		var res := int(hexes[int(hi)].resource)
-		if res < 0:
+		if res < 0 or res >= RES_COUNT:
 			continue
 		hands[player][res] = int(hands[player][res]) + 1
 
@@ -636,7 +642,7 @@ func _refresh_scores() -> void:
 
 func _least_res(player: int) -> int:
 	var best := 0
-	for i in 4:
+	for i in RES_COUNT:
 		if int(hands[player][i]) < int(hands[player][best]):
 			best = i
 	return best
@@ -644,7 +650,7 @@ func _least_res(player: int) -> int:
 func _vertex_has_ware(vkey: int) -> bool:
 	for hi in v_hexes[vkey]:
 		var res := int(hexes[int(hi)].resource)
-		if res >= 0 and int(WARE_OF_RES[res]) >= 0:
+		if res >= 0 and res < RES_COUNT and int(WARE_OF_RES[res]) >= 0:
 			return true
 	return false
 
@@ -703,10 +709,10 @@ func _deal_for(player: int, cost: Array) -> Dictionary:
 		return {}
 	var best := {}
 	var best_surplus := -1
-	for take in 4:
+	for take in cost.size():
 		if int(hands[player][take]) >= int(cost[take]):
 			continue
-		for give in 4:
+		for give in RES_COUNT:
 			if give == take:
 				continue
 			var sim: Array = (hands[player] as Array).duplicate()
@@ -715,7 +721,7 @@ func _deal_for(player: int, cost: Array) -> Dictionary:
 			sim[give] = int(sim[give]) - rate
 			sim[take] = int(sim[take]) + 1
 			var ok := true
-			for i in 4:
+			for i in cost.size():
 				if int(sim[i]) < int(cost[i]):
 					ok = false
 					break
@@ -773,7 +779,10 @@ func _resource_access(player: int, res: int) -> int:
 		if int(buildings[vkey].player) != player:
 			continue
 		for hi in v_hexes[int(vkey)]:
-			if int(hexes[int(hi)].resource) == res:
+			var hr := int(hexes[int(hi)].resource)
+			if hr < 0 or hr >= RES_COUNT:
+				continue
+			if hr == res:
 				n += 1
 	return n
 

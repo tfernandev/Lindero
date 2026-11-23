@@ -3,7 +3,11 @@ extends Node2D
 const GameScript := preload("res://scripts/match.gd")
 const HexGeom := preload("res://scripts/hex_lib.gd")
 const UiTheme := preload("res://scripts/ui_theme.gd")
+const AnimUtil := preload("res://scripts/anim_util.gd")
 const TableBoard := preload("res://scripts/table_board.gd")
+const MatchHud := preload("res://scripts/match_hud.gd")
+const DiceRollFxScript := preload("res://scripts/dice_roll_fx.gd")
+const HarvestFxScript := preload("res://scripts/harvest_fx.gd")
 
 var game = null
 var font: Font
@@ -68,10 +72,17 @@ var hand_rows: Array[HBoxContainer] = []
 var table_host: SubViewportContainer
 var table_view: SubViewport
 var table: TableBoard
+var hud
+var _touches: Dictionary = {}
+var _pinch_span := 0.0
+var _pinch_mid := Vector2.ZERO
 var hover_q := -999
 var hover_r := -999
 var hover_vertex := -1
 var hover_edge := ""
+var _orbit_btn := -1
+var _left_armed := false
+var _left_at := Vector2.ZERO
 var placed_edge := ""
 var placed_vertex := -1
 var placed_level := 1
@@ -85,6 +96,14 @@ var _seen_roads: Dictionary = {}
 var _seen_buildings: Dictionary = {}
 var _seen_prog: Array[int] = [0, 0, 0]
 var _dice_tween: Tween
+var _seen_hands: Array = [0, 0, 0, 0, 0]
+var _seen_hands_rival: Array = [0, 0, 0, 0, 0]
+var _seen_wares: Array = [0, 0, 0]
+var harvest_fx: Control
+var _harvest_token := 0
+var dice_fx: Control
+var _dice_busy := false
+var _pending_harvest := 0
 
 func _ready() -> void:
 	font = ThemeDB.fallback_font
@@ -98,6 +117,11 @@ func _ready() -> void:
 	_layout_chrome()
 	_refresh()
 	set_process(false)
+	if OS.is_debug_build() and table != null:
+		for a in OS.get_cmdline_user_args():
+			if a == "--debug-board":
+				table.set_debug_visible(true)
+				break
 
 func _process(delta: float) -> void:
 	var busy := false
@@ -118,10 +142,12 @@ func _on_resized() -> void:
 	_layout_chrome()
 
 func _input(event: InputEvent) -> void:
-	if event is InputEventMouseMotion:
+	if event is InputEventMouseMotion and _orbit_btn < 0:
 		_hover(event.position)
 
 func _unhandled_input(event: InputEvent) -> void:
+	if _camera_input(event):
+		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
 			KEY_SPACE:
@@ -141,22 +167,138 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_ENTER, KEY_KP_ENTER:
 				_on_end_turn()
 			KEY_ESCAPE:
-				if banner != "":
+				if hud != null and hud.pause_open():
+					hud.close_pause()
+				elif hud != null and hud.sheet_open():
+					hud.close_sheets()
+				elif banner != "":
 					banner = ""
 					_refresh()
+			KEY_F3:
+				if OS.is_debug_build() and table != null:
+					table.toggle_debug()
 		return
-	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		_on_board_click(event.position)
+
+func _camera_input(event: InputEvent) -> bool:
+	if table == null:
+		return false
+	if hud != null and hud.blocks_board():
+		return false
+	var plate := _plate_rect()
+	if event is InputEventMagnifyGesture:
+		var mag := event as InputEventMagnifyGesture
+		if not plate.has_point(mag.position):
+			return false
+		table.zoom_by(1.0 / maxf(mag.factor, 0.05))
+		get_viewport().set_input_as_handled()
+		return true
+	if event is InputEventPanGesture:
+		var pan := event as InputEventPanGesture
+		if not plate.has_point(pan.position):
+			return false
+		table.pan_focus(pan.delta, plate.size)
+		get_viewport().set_input_as_handled()
+		return true
+	if event is InputEventScreenTouch:
+		var tap := event as InputEventScreenTouch
+		if tap.pressed:
+			if not plate.has_point(tap.position):
+				return false
+			_touches[tap.index] = tap.position
+		else:
+			_touches.erase(tap.index)
+		if _touches.size() >= 2:
+			_left_armed = false
+			_pinch_span = _touch_span()
+			_pinch_mid = _touch_mid()
+			get_viewport().set_input_as_handled()
+			return true
+		return false
+	if event is InputEventScreenDrag and _touches.size() >= 2:
+		var drag := event as InputEventScreenDrag
+		_touches[drag.index] = drag.position
+		var span_now := _touch_span()
+		var mid_now := _touch_mid()
+		if _pinch_span > 8.0 and span_now > 8.0:
+			table.zoom_by(_pinch_span / span_now)
+		table.pan_focus(mid_now - _pinch_mid, plate.size)
+		_pinch_span = span_now
+		_pinch_mid = mid_now
+		get_viewport().set_input_as_handled()
+		return true
+	if event is InputEventMouseButton:
+		var btn := event as InputEventMouseButton
+		if btn.button_index == MOUSE_BUTTON_WHEEL_UP or btn.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			if not btn.pressed or not plate.has_point(btn.position):
+				return false
+			var steps := absf(btn.factor) if absf(btn.factor) > 0.01 else 1.0
+			if btn.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+				steps = -steps
+			table.zoom_by(pow(0.9, steps))
+			get_viewport().set_input_as_handled()
+			return true
+		if btn.button_index == MOUSE_BUTTON_RIGHT or btn.button_index == MOUSE_BUTTON_MIDDLE:
+			if btn.pressed:
+				if not plate.has_point(btn.position):
+					return false
+				_begin_orbit(btn.button_index)
+				get_viewport().set_input_as_handled()
+				return true
+			if _orbit_btn == btn.button_index:
+				_end_orbit()
+			return true
+		if btn.button_index == MOUSE_BUTTON_LEFT:
+			if btn.pressed:
+				if not plate.has_point(btn.position):
+					return false
+				_left_armed = true
+				_left_at = btn.position
+				return true
+			if _left_armed:
+				var dragged := _orbit_btn == MOUSE_BUTTON_LEFT
+				_left_armed = false
+				if dragged:
+					_end_orbit()
+				elif _orbit_btn < 0 and plate.has_point(btn.position) and btn.position.distance_to(_left_at) <= 8.0:
+					_on_board_click(btn.position)
+				return true
+			return false
+	if event is InputEventMouseMotion and (_orbit_btn >= 0 or _left_armed):
+		var mot := event as InputEventMouseMotion
+		if _left_armed and _orbit_btn < 0 and mot.position.distance_to(_left_at) > 8.0:
+			_begin_orbit(MOUSE_BUTTON_LEFT)
+		if _orbit_btn >= 0:
+			table.orbit(-mot.relative.x * 0.0075, -mot.relative.y * 0.004)
+			get_viewport().set_input_as_handled()
+		return true
+	return false
+
+func _touch_span() -> float:
+	var pts: Array = _touches.values()
+	if pts.size() < 2:
+		return 0.0
+	return (pts[0] as Vector2).distance_to(pts[1] as Vector2)
+
+func _touch_mid() -> Vector2:
+	var pts: Array = _touches.values()
+	if pts.size() < 2:
+		return Vector2.ZERO
+	return ((pts[0] as Vector2) + (pts[1] as Vector2)) * 0.5
+
+func _begin_orbit(button: int) -> void:
+	_orbit_btn = button
+	DisplayServer.cursor_set_shape(DisplayServer.CURSOR_DRAG)
+
+func _end_orbit() -> void:
+	_orbit_btn = -1
+	DisplayServer.cursor_set_shape(DisplayServer.CURSOR_ARROW)
 
 func _draw() -> void:
 	var view := get_viewport_rect().size
-	draw_rect(Rect2(Vector2.ZERO, view), Color("171310"))
-	var frame := Rect2(12, 12, maxf(80.0, view.x - _hud_width(view) - 36.0), maxf(80.0, view.y - _chart_height(view) - 24.0))
-	draw_rect(frame, Color("3d2c22"))
-	draw_rect(frame.grow(-7), Color("c4a574"))
-	var plate := frame.grow(-10)
+	draw_rect(Rect2(Vector2.ZERO, view), Color("142c26"))
 	if table != null:
 		return
+	var plate := _plate_rect()
 	if sea_tex != null:
 		_draw_cover(sea_tex, plate)
 	else:
@@ -224,7 +366,7 @@ func _draw_hex(h: Dictionary) -> void:
 	if produce_t < 1.0 and number == produce_n and number != 7:
 		var fade := 1.0 - _ease_out(produce_t)
 		draw_arc(screen_center, maxf(22.0, 28.0 * board_scale), 0, TAU, 28, Color(0.89, 0.69, 0.35, 0.5 * fade), maxf(1.5, 2.2 * board_scale), true)
-	if res >= 0:
+	if res >= 0 and res < GameScript.WARE_OF_RES.size():
 		var ware := int(GameScript.WARE_OF_RES[res])
 		if ware >= 0 and board_scale >= 0.82:
 			var ware_at := screen_center + Vector2(0, 34.0 * board_scale)
@@ -391,12 +533,12 @@ func _dist_segment(p: Vector2, a: Vector2, b: Vector2) -> float:
 	return p.distance_to(a + ab * t)
 
 func _on_roll() -> void:
-	if ai_running:
+	if ai_running or _dice_busy:
 		return
 	_after(game.roll(0))
 
 func _on_end_turn() -> void:
-	if ai_running:
+	if ai_running or _dice_busy:
 		return
 	_after(game.end_turn(0))
 
@@ -409,6 +551,8 @@ func _after(err: String) -> void:
 	banner = err
 	if game.phase == GameScript.Phase.BUILD and game.current_player == 0:
 		_prefer_tool()
+	if err == "" and hud != null:
+		hud.close_sheets()
 	_refresh()
 	if err != "":
 		return
@@ -440,6 +584,10 @@ func _run_rival() -> void:
 		elif game.phase == GameScript.Phase.ROLL:
 			builds = 0
 			err = game.roll(1)
+			if err == "":
+				_refresh()
+				if _dice_busy and dice_fx != null:
+					await (dice_fx as DiceRollFx).finished
 		elif game.phase == GameScript.Phase.BUILD:
 			if builds >= 4:
 				err = game.end_turn(1)
@@ -466,6 +614,14 @@ func _run_rival() -> void:
 		_refresh()
 
 func _on_menu() -> void:
+	# Cortar FX activos antes de cambiar de escena (evita callbacks huérfanos).
+	_harvest_token += 1
+	_dice_busy = false
+	_pending_harvest = 0
+	if harvest_fx != null:
+		(harvest_fx as HarvestFx).clear_all()
+	if dice_fx != null:
+		(dice_fx as DiceRollFx).cancel()
 	get_tree().change_scene_to_file("res://scenes/menu.tscn")
 
 func _on_restart() -> void:
@@ -473,6 +629,13 @@ func _on_restart() -> void:
 	ai_running = false
 	banner = ""
 	tool = "settlement"
+	_harvest_token += 1
+	_dice_busy = false
+	_pending_harvest = 0
+	if harvest_fx != null:
+		(harvest_fx as HarvestFx).clear_all()
+	if dice_fx != null:
+		(dice_fx as DiceRollFx).cancel()
 	game.new_game()
 	_layout_board()
 	_refresh()
@@ -554,6 +717,11 @@ func _on_motion() -> void:
 	if UiTheme.reduce_motion:
 		place_t = 1.0
 		produce_t = 1.0
+		if harvest_fx != null:
+			(harvest_fx as HarvestFx).clear_all()
+		if dice_fx != null and _dice_busy:
+			(dice_fx as DiceRollFx).cancel()
+			_on_dice_finished(_pending_harvest if _pending_harvest != 0 else int(game.last_roll))
 		set_process(false)
 		if instruction_label != null:
 			instruction_label.modulate.a = 1.0
@@ -563,6 +731,9 @@ func _on_motion() -> void:
 	queue_redraw()
 
 func _paint_motion_btn() -> void:
+	if hud != null and hud.game_menu != null:
+		hud.game_menu.set_calm(UiTheme.reduce_motion)
+		return
 	if motion_btn == null:
 		return
 	var calm: bool = UiTheme.reduce_motion
@@ -628,13 +799,9 @@ func _watch_motion() -> void:
 			progressed = true
 			_pop_control(track_btns[i])
 	if rolled:
-		_pop_dice()
-		if int(game.last_roll) == 7:
-			produce_n = 0
-			produce_t = 1.0
-		else:
-			produce_n = int(game.last_roll)
-			produce_t = 0.0 if not UiTheme.reduce_motion else 1.0
+		_pending_harvest = int(game.last_roll)
+		_seen_roll = int(game.last_roll)
+		_start_dice_roll(int(game.die_a), int(game.die_b), int(game.last_roll))
 	if new_edge != "":
 		placed_edge = new_edge
 		placed_vertex = -1
@@ -648,9 +815,52 @@ func _watch_motion() -> void:
 		_pop_hand(int(game.current_player))
 	if not UiTheme.reduce_motion and (rolled or new_edge != "" or new_vertex >= 0 or progressed or turned):
 		set_process(true)
-	_snapshot_motion()
+	_snapshot_motion(not rolled)
 
-func _snapshot_motion() -> void:
+func _start_dice_roll(die_a: int, die_b: int, total: int) -> void:
+	_dice_busy = true
+	if dice_fx == null:
+		_on_dice_finished(total)
+		return
+	if not (dice_fx as DiceRollFx).finished.is_connected(_on_dice_finished):
+		(dice_fx as DiceRollFx).finished.connect(_on_dice_finished)
+	(dice_fx as DiceRollFx).play(die_a, die_b, total)
+	_refresh_roll_lock()
+
+func _on_dice_finished(total: int) -> void:
+	_dice_busy = false
+	var n := total if total != 0 else _pending_harvest
+	_pending_harvest = 0
+	if n == 7:
+		produce_n = 0
+		produce_t = 1.0
+	elif n >= 2:
+		produce_n = n
+		produce_t = 0.0 if not UiTheme.reduce_motion else 1.0
+		_play_harvest_fx(n)
+		if not UiTheme.reduce_motion:
+			set_process(true)
+	if hud != null:
+		hud.show_toast(_roll_toast())
+	_snapshot_hands()
+	_refresh_roll_lock()
+	_refresh()
+
+func _refresh_roll_lock() -> void:
+	if roll_btn == null:
+		return
+	if _dice_busy:
+		roll_btn.visible = true
+		roll_btn.disabled = true
+		roll_btn.text = "Tirando…"
+		UiTheme.paint(roll_btn, "quiet")
+	elif game != null and game.phase == GameScript.Phase.ROLL and game.current_player == 0 and not ai_running:
+		roll_btn.visible = true
+		roll_btn.disabled = false
+		roll_btn.text = "Tirar dados"
+		UiTheme.paint(roll_btn, "primary")
+
+func _snapshot_motion(update_hands: bool = true) -> void:
 	_seen_roll = int(game.last_roll)
 	_seen_player = int(game.current_player)
 	_seen_roads = game.roads.duplicate()
@@ -659,12 +869,105 @@ func _snapshot_motion() -> void:
 		_seen_buildings[int(v)] = int(game.buildings[v].level)
 	for i in 3:
 		_seen_prog[i] = int(game.progress[0][i])
+	if update_hands:
+		_snapshot_hands()
+
+func _snapshot_hands() -> void:
+	_seen_hands.clear()
+	_seen_hands_rival.clear()
+	for i in GameScript.RES_COUNT:
+		_seen_hands.append(int(game.hands[0][i]))
+		_seen_hands_rival.append(int(game.hands[1][i]))
+	for i in 3:
+		_seen_wares[i] = int(game.wares[0][i])
+
+## Visual only: mirror produce() payouts into flying cards. Does not change hands.
+func _play_harvest_fx(number: int) -> void:
+	if harvest_fx == null or game == null or UiTheme.reduce_motion:
+		return
+	if number < 2 or number > 12 or number == 7:
+		return
+	_harvest_token += 1
+	var token := _harvest_token
+	var flights: Array = _harvest_flights(number)
+	_append_acequia_flights(flights)
+	if flights.is_empty():
+		return
+	var delay := 0.0
+	for item in flights:
+		if token != _harvest_token:
+			return
+		var player := int(item.player)
+		var res := int(item.res)
+		var from: Vector2 = item.from
+		var to: Vector2 = get_viewport_rect().size * Vector2(0.5, 0.12)
+		if hud != null:
+			to = hud.resource_anchor(player, res)
+		var tex: Texture2D = card_tex[res] if res < card_tex.size() else null
+		var accent: Color = GameScript.RES_COLOR[res] if res < GameScript.RES_COLOR.size() else UiTheme.GOLD
+		var arrive_p := player
+		var arrive_r := res
+		(harvest_fx as HarvestFx).play_card(tex, accent, from, to, delay, func() -> void:
+			if hud != null:
+				hud.pulse_resource(arrive_p, arrive_r)
+		)
+		delay += 0.05 + randf() * 0.03
+
+func _harvest_flights(number: int) -> Array:
+	var out: Array = []
+	for h in game.hexes:
+		if int(h.number) != number or int(h.resource) < 0:
+			continue
+		var res := int(h.resource)
+		if res < 0 or res >= GameScript.RES_COUNT:
+			continue
+		var from := _hex_ui_pos(int(h.q), int(h.r))
+		for v in h.vertices:
+			var vi := int(v)
+			if not game.buildings.has(vi):
+				continue
+			var b: Dictionary = game.buildings[vi]
+			var who := int(b.player)
+			var level := int(b.level)
+			var copies := 1
+			if level > 1:
+				var ware := int(GameScript.WARE_OF_RES[res]) if res < GameScript.WARE_OF_RES.size() else -1
+				copies = 2 if ware < 0 else 1
+			for _i in copies:
+				out.append({"player": who, "res": res, "from": from})
+	return out
+
+func _append_acequia_flights(flights: Array) -> void:
+	# Extra primas from Acequia (or any mismatch) — never invent beyond real deltas.
+	var planned := [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0]]
+	for item in flights:
+		var p := int(item.player)
+		var r := int(item.res)
+		if p >= 0 and p < 2 and r >= 0 and r < GameScript.RES_COUNT:
+			planned[p][r] = int(planned[p][r]) + 1
+	var prev := [_seen_hands, _seen_hands_rival]
+	var island := get_viewport_rect().get_center()
+	if table != null:
+		island = _hex_ui_pos(0, 0)
+	for p in 2:
+		for i in GameScript.RES_COUNT:
+			var before := int(prev[p][i]) if i < prev[p].size() else 0
+			var after := int(game.hands[p][i])
+			var extra := after - before - int(planned[p][i])
+			for _k in maxi(0, extra):
+				flights.append({"player": p, "res": i, "from": island})
+
+func _hex_ui_pos(q: int, r: int) -> Vector2:
+	if table == null or table_host == null or table_view == null:
+		return _to_screen(HexGeom.hex_to_pixel(q, r))
+	var vp := table.hex_screen_pos(q, r)
+	var ui_scale := table_host.size / Vector2(maxi(table_view.size.x, 1), maxi(table_view.size.y, 1))
+	return table_host.global_position + vp * ui_scale
 
 func _pop_dice() -> void:
 	if dice_label == null or UiTheme.reduce_motion:
 		return
-	if _dice_tween != null and _dice_tween.is_valid():
-		_dice_tween.kill()
+	AnimUtil.kill(_dice_tween)
 	dice_label.pivot_offset = dice_label.size * 0.5
 	dice_label.scale = Vector2(1.08, 1.08)
 	_dice_tween = create_tween()
@@ -704,124 +1007,97 @@ func _ease_out(t: float) -> float:
 	return 1.0 - (1.0 - x) * (1.0 - x)
 
 func _refresh() -> void:
-	if instruction_label == null:
+	if hud == null or instruction_label == null:
 		queue_redraw()
 		return
+	# Arrancar FX de dados antes de pintar HUD (evita spoilear contadores un frame).
+	_watch_motion()
 	var failed: bool = banner != ""
-	var human_roll: bool = game.phase == GameScript.Phase.ROLL and game.current_player == 0 and not ai_running
-	var human_build: bool = game.phase == GameScript.Phase.BUILD and game.current_player == 0 and not ai_running
-	instruction_label.text = banner if failed else _prompt()
-	instruction_label.add_theme_color_override("font_color", UiTheme.GOLD if failed else UiTheme.INK)
-	if game.last_roll == 0:
-		dice_label.text = "dados"
-		dice_label.add_theme_font_size_override("font_size", 13)
-		dice_parts.visible = false
-		dice_label.add_theme_color_override("font_color", UiTheme.INK_DIM)
-		if dice_edge != null:
-			dice_edge.border_color = UiTheme.BORDER
-	else:
-		dice_label.text = str(game.last_roll)
-		dice_label.add_theme_font_size_override("font_size", 22)
-		dice_parts.visible = true
-		dice_parts.text = "%d+%d" % [game.die_a, game.die_b]
-		var drought: bool = game.last_roll == 7
-		dice_label.add_theme_color_override("font_color", Color("b42318") if drought else UiTheme.GOLD)
-		if dice_edge != null:
-			dice_edge.border_color = Color("b42318") if drought else UiTheme.GOLD
-	score_label.text = "[color=#%s]Vos %d[/color]    [color=#%s]Vecino %d[/color]    meta %d" % [
-		GameScript.PLAYER_COLOR[0].to_html(false), game.scores[0],
-		GameScript.PLAYER_COLOR[1].to_html(false), game.scores[1],
-		GameScript.WIN,
-	]
+	var human_roll: bool = game.phase == GameScript.Phase.ROLL and game.current_player == 0 and not ai_running and not _dice_busy
+	var human_build: bool = game.phase == GameScript.Phase.BUILD and game.current_player == 0 and not ai_running and not _dice_busy
+	var piece := "Camino" if tool == "road" else ("Puesto" if tool == "settlement" else "Granja")
+	var afford: bool = not human_build or game.can_afford(0, tool)
+	var cost_line := ""
+	if human_build:
+		cost_line = "%s · %s%s" % [piece, game.fmt_cost(game.cost_of(0, tool)), _missing_line()]
+	var ctx := {
+		"failed": failed,
+		"prompt": banner if failed else _prompt(),
+		"tool": tool,
+		"ai": ai_running,
+		"dice_busy": _dice_busy,
+		"human_roll": human_roll,
+		"human_build": human_build,
+		"cost_line": cost_line,
+		"afford": afford,
+		"road_role": _build_role("road", tool == "road"),
+		"set_role": _build_role("settlement", tool == "settlement"),
+		"up_role": _build_role("upgrade", tool == "upgrade"),
+		"give_sel": give_sel,
+		"take_sel": take_sel,
+		"give_ware": give_ware,
+		"take_ware": take_ware,
+		"trade_deal": _trade_deal(),
+		"trade_ready": _trade_ready(),
+		"rival_chart": _chart_line(1),
+		"calm": UiTheme.reduce_motion,
+		# Snapshot pre-roll para que el HUD no spoilee la cosecha durante el tumble.
+		"hold_counts": _dice_busy,
+		"hands_you": _seen_hands.duplicate(),
+		"hands_rival": _seen_hands_rival.duplicate(),
+		"wares_you": _seen_wares.duplicate(),
+	}
+	for i in 3:
+		ctx["track_%d" % i] = _track_caption(i, game.can_advance(0, i))
+	hud.sync(game, ctx)
 	_paint_counts(you_counts, you_icons, 0)
 	_paint_counts(rival_counts, rival_icons, 1)
 	_mark_hands()
-	if human_build:
-		var piece := "Camino" if tool == "road" else ("Puesto" if tool == "settlement" else "Granja")
-		var afford: bool = game.can_afford(0, tool)
-		cost_label.text = "%s · %s" % [piece, game.fmt_cost(game.cost_of(0, tool))]
-		cost_label.add_theme_color_override("font_color", UiTheme.INK_DIM if afford else UiTheme.GOLD)
-	else:
-		cost_label.text = ""
-	rival_chart.text = "Vecino   " + _chart_line(1)
-	var rate := int(game.trade_rate(0))
-	trade_btn.text = "Cambiar %d:1" % rate if rate > 0 else "Cambiar"
-	var tail := PackedStringArray()
-	var from := maxi(0, game.log.size() - 3)
-	for i in range(from, game.log.size()):
-		tail.append(game.log[i])
-	log_label.text = "\n".join(tail)
-	roll_btn.disabled = not human_roll
-	road_btn.disabled = not human_build
-	set_btn.disabled = not human_build
-	up_btn.disabled = not human_build
-	end_btn.disabled = not human_build
-	road_btn.text = ("● " if tool == "road" and human_build else "") + "Camino"
-	set_btn.text = ("● " if tool == "settlement" and human_build else "") + "Puesto"
-	up_btn.text = ("● " if tool == "upgrade" and human_build else "") + "Granja"
-	UiTheme.paint(roll_btn, "primary" if human_roll else "quiet")
-	UiTheme.paint(road_btn, _build_role("road", tool == "road"))
-	UiTheme.paint(set_btn, _build_role("settlement", tool == "settlement"))
-	UiTheme.paint(up_btn, _build_role("upgrade", tool == "upgrade"))
-	UiTheme.paint(end_btn, "quiet")
 	_explain_controls(human_roll, human_build)
-	UiTheme.paint(restart_btn, "quiet")
-	UiTheme.paint(menu_btn, "quiet")
-	for i in track_btns.size():
-		var open: bool = game.can_advance(0, i)
-		track_btns[i].text = _track_caption(i, open)
-		track_btns[i].disabled = not human_build
-		var track_ink: Color = GameScript.TRACK_COLOR[i] if open else UiTheme.INK_DIM
-		track_btns[i].add_theme_color_override("font_color", track_ink)
-		track_btns[i].add_theme_color_override("font_hover_color", track_ink)
-		track_btns[i].add_theme_color_override("font_pressed_color", track_ink)
-	for i in give_btns.size():
-		var ware := i >= 4
-		var idx := i - 4 if ware else i
-		var on := human_build and give_ware == ware and give_sel == idx
-		give_btns[i].text = "●" if on else ""
-		give_btns[i].disabled = not human_build
-		UiTheme.paint(give_btns[i], "chip_on" if on else "chip")
-	for i in take_btns.size():
-		var ware := i >= 4
-		var idx := i - 4 if ware else i
-		var on := human_build and take_ware == ware and take_sel == idx
-		take_btns[i].text = "●" if on else ""
-		take_btns[i].disabled = not human_build
-		UiTheme.paint(take_btns[i], "chip_on" if on else "chip")
-	var deal_ready: bool = _trade_ready()
-	trade_btn.text = _trade_deal()
-	trade_btn.disabled = not human_build
-	UiTheme.paint(trade_btn, "primary" if deal_ready else "chip")
-	_paint_motion_btn()
-	_watch_motion()
 	_sync_table()
 	queue_redraw()
 
 func _paint_counts(counts: Array[Label], icons: Array[CanvasItem], player: int) -> void:
-	if counts.size() < 7:
+	var slots := GameScript.RES_COUNT + GameScript.WARE_NAME.size()
+	if counts.size() < slots:
 		return
-	for i in 7:
-		var value := int(game.hands[player][i]) if i < 4 else int(game.wares[player][i - 4])
+	for i in slots:
+		# Durante la tirada visual, mostrar el snapshot pre-roll (la lógica ya produjo).
+		var value := _display_good_count(player, i)
 		counts[i].text = str(value)
 		if player == 0:
 			counts[i].tooltip_text = "%s · %d" % [_good_name(i), value]
 			_mark_badge(i, value)
-		if i < icons.size():
+		if i < icons.size() and icons[i] != null:
 			icons[i].modulate = Color(1, 1, 1, 1.0 if value > 0 else 0.4)
-		var slot := player * 7 + i
+		var slot := player * slots + i
+		if _dice_busy:
+			continue
 		if slot < seen_counts.size() and seen_counts[slot] >= 0 and seen_counts[slot] != value:
 			_pulse_count(counts[i])
 		if slot < seen_counts.size():
 			seen_counts[slot] = value
 
+
+func _display_good_count(player: int, index: int) -> int:
+	if _dice_busy:
+		if index < GameScript.RES_COUNT:
+			var snap: Array = _seen_hands if player == 0 else _seen_hands_rival
+			if index < snap.size():
+				return int(snap[index])
+		elif player == 0:
+			var wi := index - GameScript.RES_COUNT
+			if wi >= 0 and wi < _seen_wares.size():
+				return int(_seen_wares[wi])
+	if index < GameScript.RES_COUNT:
+		return int(game.hands[player][index])
+	return int(game.wares[player][index - GameScript.RES_COUNT])
+
 func _pulse_count(label: Label) -> void:
 	if UiTheme.reduce_motion or label == null:
 		return
 	if label.has_meta("pulse"):
-		var old: Variant = label.get_meta("pulse")
-		if old is Tween and (old as Tween).is_valid():
-			(old as Tween).kill()
+		AnimUtil.kill(label.get_meta("pulse") as Tween)
 	label.pivot_offset = label.size * 0.5
 	label.scale = Vector2.ONE
 	var tw := create_tween()
@@ -844,7 +1120,7 @@ func _mark_hands() -> void:
 			hand_names[i].add_theme_color_override("font_color", ink)
 
 func _load_art() -> void:
-	for name in ["terreno_madera", "terreno_arcilla", "terreno_grano", "terreno_piedra"]:
+	for name in ["terreno_madera", "terreno_arcilla", "terreno_grano", "terreno_piedra", "terreno_ovejas"]:
 		terrain_tex.append(load("res://art/%s.jpg" % name))
 	lagoon_tex = load("res://art/terreno_laguna.jpg")
 	if ResourceLoader.exists("res://art/mar_isla.jpg"):
@@ -852,7 +1128,7 @@ func _load_art() -> void:
 	puesto_tex = _cut_plate("res://art/puesto.jpg")
 	granja_tex = _cut_plate("res://art/granja.jpg")
 	camino_tex = _cut_plate("res://art/camino.jpg")
-	for name in ["icono_madera", "icono_arcilla", "icono_grano", "icono_piedra", "icono_papel", "icono_tela", "icono_moneda"]:
+	for name in ["icono_madera", "icono_arcilla", "icono_grano", "icono_piedra", "icono_ovejas", "icono_papel", "icono_tela", "icono_moneda"]:
 		card_tex.append(load("res://art/%s.jpg" % name))
 
 func _hex_pts(h: Dictionary, grow: float, nudge: Vector2) -> PackedVector2Array:
@@ -1022,13 +1298,13 @@ func _trade_deal() -> String:
 	var rate := 2 if give_ware else int(game.trade_rate(0))
 	if rate <= 0:
 		return "Cambiar"
-	var give_name: String = _good_name(give_sel + 4) if give_ware else _good_name(give_sel)
-	var take_name: String = _good_name(take_sel + 4) if take_ware else _good_name(take_sel)
+	var give_name: String = _good_name(give_sel + GameScript.RES_COUNT) if give_ware else _good_name(give_sel)
+	var take_name: String = _good_name(take_sel + GameScript.RES_COUNT) if take_ware else _good_name(take_sel)
 	return "%d %s → 1 %s" % [rate, give_name, take_name]
 
 func _good_name(index: int) -> String:
-	if index >= 4:
-		return GameScript.WARE_NAME[index - 4]
+	if index >= GameScript.RES_COUNT:
+		return GameScript.WARE_NAME[index - GameScript.RES_COUNT]
 	return GameScript.RES_NAME[index]
 
 func _mark_badge(index: int, value: int) -> void:
@@ -1085,17 +1361,47 @@ func _on_trade() -> void:
 	_after(game.trade(0, give_sel, take_sel, give_ware))
 
 func _pick_give(index: int) -> void:
-	give_ware = index >= 4
-	give_sel = index - 4 if give_ware else index
+	give_ware = index >= GameScript.RES_COUNT
+	give_sel = index - GameScript.RES_COUNT if give_ware else index
 	_refresh()
 
 func _pick_take(index: int) -> void:
-	take_ware = index >= 4
-	take_sel = index - 4 if take_ware else index
+	take_ware = index >= GameScript.RES_COUNT
+	take_sel = index - GameScript.RES_COUNT if take_ware else index
 	_refresh()
 
-func _hud_width(view: Vector2) -> float:
-	return clampf(view.x * 0.26, 280.0, 336.0)
+func _missing_line() -> String:
+	if game == null:
+		return ""
+	var cost: Array = game.cost_of(0, tool)
+	var bits: PackedStringArray = PackedStringArray()
+	for i in cost.size():
+		var need := int(cost[i])
+		var have := int(game.hands[0][i])
+		if need > have:
+			bits.append("faltan %d %s" % [need - have, GameScript.RES_NAME[i]])
+	if bits.is_empty():
+		return ""
+	return " · " + ", ".join(bits)
+
+func _roll_toast() -> String:
+	var bits: PackedStringArray = PackedStringArray()
+	for i in GameScript.RES_COUNT:
+		var prev := int(_seen_hands[i]) if i < _seen_hands.size() else 0
+		var delta := int(game.hands[0][i]) - prev
+		if delta > 0:
+			bits.append("+%d %s" % [delta, GameScript.RES_NAME[i]])
+	for i in 3:
+		var delta := int(game.wares[0][i]) - int(_seen_wares[i])
+		if delta > 0:
+			bits.append("+%d %s" % [delta, GameScript.WARE_NAME[i]])
+	var head: String = String(game.log[game.log.size() - 1]) if not game.log.is_empty() else "Dados"
+	if bits.is_empty():
+		return head
+	return "%s · %s" % [head, ", ".join(bits)]
+
+func _hud_width(_view: Vector2) -> float:
+	return 0.0
 
 func _trade_splits(view: Vector2) -> bool:
 	var inner := view.x - _hud_width(view) - 56.0
@@ -1110,30 +1416,12 @@ func _chart_estimate(view: Vector2) -> float:
 		h += 48.0
 	return h
 
-func _chart_height(view: Vector2) -> float:
-	if chart_panel != null and chart_panel.offset_top < -40.0:
-		return -chart_panel.offset_top
-	return _chart_estimate(view)
+func _chart_height(_view: Vector2) -> float:
+	if hud != null:
+		return hud.bottom_reserve()
+	return 72.0
 
 func _layout_chrome() -> void:
-	var view := get_viewport_rect().size
-	if hud_panel == null or view.x < 8.0 or view.y < 8.0:
-		_layout_board()
-		return
-	var hud := _hud_width(view)
-	var chart := _chart_height(view)
-	hud_panel.offset_left = -(hud + 12.0)
-	chart_panel.offset_right = -(hud + 24.0)
-	chart_panel.offset_top = -chart
-	if rival_chart != null:
-		rival_chart.visible = view.y >= 660.0
-	_layout_trade(_trade_splits(view))
-	var short := view.y < 660.0
-	_fit_hands(short)
-	_fit_hud(short)
-	if hud_box != null:
-		hud_box.add_theme_constant_override("separation", 3 if short else 6)
-	call_deferred("_fit_chart")
 	_layout_board()
 
 func _fit_chart() -> void:
@@ -1216,8 +1504,9 @@ func _build_table() -> void:
 	table_view.own_world_3d = true
 	table_view.handle_input_locally = false
 	table_view.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	table_view.msaa_3d = Viewport.MSAA_2X
-	table_view.positional_shadow_atlas_size = 2048
+	table_view.msaa_3d = Viewport.MSAA_DISABLED
+	table_view.anisotropic_filtering_level = Viewport.ANISOTROPY_8X
+	table_view.positional_shadow_atlas_size = 1024
 	table_view.size = Vector2i(800, 480)
 	table_host.add_child(table_view)
 	table = TableBoard.new()
@@ -1229,8 +1518,13 @@ func _build_table() -> void:
 
 func _plate_rect() -> Rect2:
 	var view := get_viewport_rect().size
-	var frame := Rect2(12, 12, maxf(80.0, view.x - _hud_width(view) - 36.0), maxf(80.0, view.y - _chart_height(view) - 24.0))
-	return frame.grow(-10)
+	var top := 96.0
+	var bot := 56.0
+	if hud != null:
+		top = hud.top_reserve()
+		bot = hud.bottom_reserve()
+	var m := 8.0
+	return Rect2(m, top, maxf(80.0, view.x - m * 2.0), maxf(80.0, view.y - top - bot))
 
 func _place_table() -> void:
 	if table_host == null or table == null:
@@ -1270,10 +1564,7 @@ func _sync_table() -> void:
 	table.sync(game, pegs, ghosts, ups)
 
 func _board_area() -> Rect2:
-	var view := get_viewport_rect().size
-	var hud := _hud_width(view)
-	var chart := _chart_height(view)
-	return Rect2(28, 28, maxf(100.0, view.x - hud - 52.0), maxf(100.0, view.y - chart - 52.0))
+	return _plate_rect()
 
 func _to_screen(p: Vector2) -> Vector2:
 	return board_origin + p * board_scale
@@ -1285,148 +1576,61 @@ func _build_hud() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
 	var root := Control.new()
-	root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(root)
-	UiTheme.install(root)
-
-	hud_panel = Panel.new()
-	var panel := hud_panel
-	panel.anchor_left = 1.0
-	panel.anchor_right = 1.0
-	panel.anchor_top = 0.0
-	panel.anchor_bottom = 1.0
-	panel.offset_left = -328.0
-	panel.offset_right = -12.0
-	panel.offset_top = 12.0
-	panel.offset_bottom = -12.0
-	panel.add_theme_stylebox_override("panel", UiTheme.panel_box())
-	root.add_child(panel)
-
-	var scroll := ScrollContainer.new()
-	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
-	scroll.offset_left = 12
-	scroll.offset_top = 10
-	scroll.offset_right = -8
-	scroll.offset_bottom = -10
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	panel.add_child(scroll)
-
-	hud_box = VBoxContainer.new()
-	var box := hud_box
-	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	box.add_theme_constant_override("separation", 6)
-	scroll.add_child(box)
-
-	var title := _label("Lindero", 22, false)
-	title.add_theme_color_override("font_color", UiTheme.GOLD)
-	if UiTheme.display_font != null:
-		title.add_theme_font_override("font", UiTheme.display_font)
-	box.add_child(title)
-	var rule := ColorRect.new()
-	rule.custom_minimum_size = Vector2(56, 2)
-	rule.color = UiTheme.BRASS
-	rule.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	box.add_child(rule)
-	instruction_label = _label("", 16)
-	instruction_label.custom_minimum_size = Vector2(0, 48)
-	box.add_child(instruction_label)
-	var status := HBoxContainer.new()
-	status.alignment = BoxContainer.ALIGNMENT_CENTER
-	status.add_theme_constant_override("separation", 8)
-	score_label = RichTextLabel.new()
-	score_label.bbcode_enabled = true
-	score_label.fit_content = true
-	score_label.scroll_active = false
-	score_label.autowrap_mode = TextServer.AUTOWRAP_OFF
-	score_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	score_label.custom_minimum_size = Vector2(0, 36)
-	score_label.add_theme_font_size_override("normal_font_size", 16)
-	score_label.add_theme_color_override("default_color", UiTheme.INK)
-	status.add_child(score_label)
-	var dice_col := VBoxContainer.new()
-	dice_col.alignment = BoxContainer.ALIGNMENT_CENTER
-	dice_col.add_theme_constant_override("separation", 0)
-	dice_label = _label("—", 22, false)
-	dice_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	dice_parts = _label("", 12, false)
-	dice_parts.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	dice_parts.add_theme_color_override("font_color", UiTheme.INK_DIM)
-	dice_col.add_child(dice_label)
-	dice_col.add_child(dice_parts)
-	dice_col.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	dice_edge = StyleBoxFlat.new()
-	dice_edge.bg_color = Color("241c18")
-	dice_edge.border_color = UiTheme.BORDER
-	dice_edge.set_border_width_all(1)
-	dice_edge.set_corner_radius_all(8)
-	dice_edge.content_margin_left = 8
-	dice_edge.content_margin_right = 8
-	dice_edge.content_margin_top = 1
-	dice_edge.content_margin_bottom = 1
-	dice_well = Panel.new()
-	dice_well.custom_minimum_size = Vector2(64, 44)
-	dice_well.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	dice_well.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	dice_well.add_theme_stylebox_override("panel", dice_edge)
-	dice_col.set_anchors_preset(Control.PRESET_FULL_RECT)
-	dice_well.add_child(dice_col)
-	status.add_child(dice_well)
-	box.add_child(status)
+	hud = MatchHud.new()
+	root.add_child(hud)
+	hud.setup(card_tex)
+	harvest_fx = HarvestFxScript.new()
+	root.add_child(harvest_fx)
+	dice_fx = DiceRollFxScript.new()
+	root.add_child(dice_fx)
+	_bind_hud()
 	seen_counts.clear()
-	for _i in 14:
+	for _i in (GameScript.RES_COUNT + GameScript.WARE_NAME.size()) * 2:
 		seen_counts.append(-1)
-	box.add_child(_hand_block(0, you_counts, you_icons, 46))
-	box.add_child(_hand_block(1, rival_counts, rival_icons, 34))
-	cost_label = _label("", 13)
-	cost_label.add_theme_color_override("font_color", UiTheme.INK_DIM)
-	box.add_child(cost_label)
+	hud.roll_pressed.connect(_on_roll)
+	hud.end_pressed.connect(_on_end_turn)
+	hud.tool_pressed.connect(_set_tool)
+	hud.trade_pressed.connect(_on_trade)
+	hud.advance_pressed.connect(_on_advance)
+	hud.give_pressed.connect(_pick_give)
+	hud.take_pressed.connect(_pick_take)
+	hud.menu_pressed.connect(_on_menu)
+	hud.restart_pressed.connect(_on_restart)
+	hud.motion_pressed.connect(_on_motion)
+	hud.layout_changed.connect(_layout_chrome)
 
-	roll_btn = _button("Tirar dados")
-	road_btn = _button("Camino")
-	set_btn = _button("Puesto")
-	up_btn = _button("Granja")
-	end_btn = _button("Terminar turno")
-	restart_btn = _button("Otra partida")
-	menu_btn = _button("Menú")
-	roll_btn.pressed.connect(_on_roll)
-	road_btn.pressed.connect(_set_tool.bind("road"))
-	set_btn.pressed.connect(_set_tool.bind("settlement"))
-	up_btn.pressed.connect(_set_tool.bind("upgrade"))
-	end_btn.pressed.connect(_on_end_turn)
-	restart_btn.pressed.connect(_on_restart)
-	menu_btn.pressed.connect(_on_menu)
-	roll_btn.custom_minimum_size = Vector2(0, 48)
-	end_btn.custom_minimum_size = Vector2(0, 44)
-	restart_btn.custom_minimum_size = Vector2(0, 44)
-	menu_btn.custom_minimum_size = Vector2(0, 44)
-	restart_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	menu_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var tools := HBoxContainer.new()
-	tools.add_theme_constant_override("separation", 6)
-	for btn in [road_btn, set_btn, up_btn]:
-		btn.custom_minimum_size = Vector2(0, 44)
-		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		tools.add_child(btn)
-	box.add_child(roll_btn)
-	box.add_child(tools)
-	box.add_child(end_btn)
-	exit_row = HBoxContainer.new()
-	exit_row.add_theme_constant_override("separation", 6)
-	exit_row.add_child(restart_btn)
-	exit_row.add_child(menu_btn)
-	box.add_child(exit_row)
-	motion_btn = _button("Menos movimiento")
-	motion_btn.custom_minimum_size = Vector2(0, 44)
-	motion_btn.tooltip_text = "Atenúa dados, fichas, caminos y el cambio de turno."
-	motion_btn.pressed.connect(_on_motion)
-	box.add_child(motion_btn)
-	_build_chart(root)
-
-	log_label = _label("", 13)
-	log_label.add_theme_color_override("font_color", UiTheme.INK_DIM)
-	log_label.custom_minimum_size = Vector2(0, 36)
-	box.add_child(log_label)
+func _bind_hud() -> void:
+	instruction_label = hud.instruction_label
+	dice_label = hud.dice_label
+	dice_parts = hud.dice_parts
+	dice_edge = hud.dice_edge
+	you_counts.assign(hud.you_counts)
+	rival_counts.assign(hud.rival_counts)
+	you_icons.assign(hud.you_icons)
+	rival_icons.assign(hud.rival_icons)
+	you_badges.assign(hud.you_badges)
+	rival_badges.assign(hud.rival_badges)
+	hand_blocks.assign(hud.hand_blocks)
+	hand_names.assign(hud.hand_names)
+	hand_marks.assign(hud.hand_marks)
+	roll_btn = hud.roll_btn
+	road_btn = hud.road_btn
+	set_btn = hud.set_btn
+	up_btn = hud.up_btn
+	end_btn = hud.end_btn
+	restart_btn = hud.restart_btn
+	menu_btn = hud.menu_btn
+	cost_label = hud.cost_label
+	rival_chart = hud.rival_chart
+	track_btns.assign(hud.track_btns)
+	give_btns.assign(hud.give_btns)
+	take_btns.assign(hud.take_btns)
+	trade_btn = hud.trade_btn
+	motion_btn = hud.motion_btn
+	log_label = hud.note_label
 
 func _build_chart(root: Control) -> void:
 	chart_panel = Panel.new()

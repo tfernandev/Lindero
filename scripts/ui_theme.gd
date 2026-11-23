@@ -1,25 +1,36 @@
 extends RefCounted
 
-# Mesa de Lindero: madera oscura, papel crema, oro viejo.
-# Un solo acento fuerte por vez. Los números no viven en las imágenes.
+# Lindero Isla — mesa moderna, cálida y clara.
+# Tablero protagonista. UI: salvia, marfil, madera, terracota, oro suave.
+# Tipografía: Fraunces (títulos) + Nunito (cuerpo/controles).
 
+# INK = texto sobre paneles oscuros (legacy HUD). INK_PAPER = texto sobre pergamino.
 const INK := Color("f3ead7")
+const INK_SOFT := Color("f3ead7")
+const INK_PAPER := Color("2a1c10")
 const INK_DIM := Color("9a8b78")
 const INK_ON_GOLD := Color("2a1c10")
-const GOLD := Color("e2b15a")
+const GOLD := Color("d4a85a")
 const GOLD_DEEP := Color("a8752e")
-const GOLD_HOVER := Color("f0c36a")
-const WOOD := Color("3a2e24")
-const WOOD_HOVER := Color("4a3c30")
-const WOOD_PRESS := Color("241c16")
-const PANEL := Color("1c1612")
+const GOLD_HOVER := Color("e8c078")
+const WOOD := Color("3a3228")
+const WOOD_HOVER := Color("4a4236")
+const WOOD_PRESS := Color("2a241c")
+const PANEL := Color("1e1a16")
+const PANEL_SOFT := Color("f4efe4")
 const BORDER := Color("6b5340")
 const PAPER := Color("f4efe4")
 const BRASS := Color("c4a574")
+const SAGE := Color("7a9a78")
+const SAGE_DEEP := Color("4f6b52")
+const SAGE_MIST := Color("c5d4c0")
+const TERRACOTTA := Color("b85a32")
 const SPACE := 8
 
 static var theme: Theme
 static var display_font: Font
+static var body_font: Font
+static var bold_font: Font
 static var reduce_motion := false
 static var _roles: Dictionary = {}
 static var _motion_loaded := false
@@ -60,13 +71,13 @@ static func set_reduce_motion(on: bool) -> void:
 
 static func panel_box() -> StyleBoxFlat:
 	var box := StyleBoxFlat.new()
-	box.bg_color = PANEL
-	box.border_color = BORDER
-	box.set_border_width_all(1)
-	box.set_corner_radius_all(12)
-	box.shadow_color = Color(0, 0, 0, 0.45)
+	box.bg_color = Color(PANEL.r, PANEL.g, PANEL.b, 0.94)
+	box.border_color = GOLD
+	box.set_border_width_all(2)
+	box.set_corner_radius_all(16)
+	box.shadow_color = Color(0, 0, 0, 0.4)
 	box.shadow_size = 14
-	box.shadow_offset = Vector2(0, 5)
+	box.shadow_offset = Vector2(0, 6)
 	return box
 
 static func paper_box() -> StyleBoxFlat:
@@ -74,10 +85,21 @@ static func paper_box() -> StyleBoxFlat:
 	box.bg_color = PAPER
 	box.border_color = BORDER
 	box.set_border_width_all(1)
-	box.set_corner_radius_all(4)
-	box.shadow_color = Color(0, 0, 0, 0.28)
-	box.shadow_size = 3
-	box.shadow_offset = Vector2(0, 1)
+	box.set_corner_radius_all(10)
+	box.shadow_color = Color(0, 0, 0, 0.22)
+	box.shadow_size = 4
+	box.shadow_offset = Vector2(0, 2)
+	return box
+
+static func sage_banner() -> StyleBoxFlat:
+	var box := StyleBoxFlat.new()
+	box.bg_color = SAGE_MIST
+	box.border_color = SAGE_DEEP
+	box.set_border_width_all(1)
+	box.set_corner_radius_all(10)
+	box.shadow_color = Color(0.2, 0.25, 0.18, 0.25)
+	box.shadow_size = 4
+	box.shadow_offset = Vector2(0, 2)
 	return box
 
 static func well(border: Color, fill: Color) -> StyleBoxFlat:
@@ -85,7 +107,7 @@ static func well(border: Color, fill: Color) -> StyleBoxFlat:
 	box.bg_color = fill
 	box.border_color = border
 	box.set_border_width_all(2)
-	box.set_corner_radius_all(8)
+	box.set_corner_radius_all(10)
 	box.content_margin_left = 6
 	box.content_margin_right = 6
 	box.content_margin_top = 2
@@ -95,6 +117,8 @@ static func well(border: Color, fill: Color) -> StyleBoxFlat:
 static func paint(btn: Button, role: String) -> void:
 	if theme == null:
 		_build()
+	if not _roles.has(role):
+		role = "quiet"
 	var pack: Dictionary = _roles[role]
 	var boxes: Dictionary = pack["box"]
 	for state in boxes.keys():
@@ -107,20 +131,21 @@ static func paint(btn: Button, role: String) -> void:
 	btn.add_theme_color_override("font_disabled_color", pack["dim"])
 
 static func _build() -> void:
-	var body := _font("res://fonts/Nunito-Regular.ttf")
-	var bold := _font("res://fonts/Nunito-Bold.ttf")
+	body_font = _font("res://fonts/Nunito-Regular.ttf")
+	bold_font = _font("res://fonts/Nunito-Bold.ttf")
 	display_font = _font("res://fonts/Fraunces-SemiBold.ttf")
 	theme = Theme.new()
-	if body != null:
-		theme.default_font = body
+	if body_font != null:
+		theme.default_font = body_font
 	theme.default_font_size = 16
-	if bold != null:
-		theme.set_font("font", "Button", bold)
-	var quiet := _pack(WOOD, WOOD_HOVER, WOOD_PRESS, BORDER, GOLD, INK, INK_DIM, 3)
+	if bold_font != null:
+		theme.set_font("font", "Button", bold_font)
+	var quiet := _pack(WOOD, WOOD_HOVER, WOOD_PRESS, BORDER, GOLD, INK_SOFT, Color("8a7a68"), 3)
 	var primary := _pack(GOLD, GOLD_HOVER, GOLD_DEEP, GOLD_DEEP, Color("f6f1e4"), INK_ON_GOLD, Color("6d5a40"), 4)
-	var chip := _pack(WOOD, WOOD_HOVER, WOOD_PRESS, BORDER, GOLD, INK, INK_DIM, 0)
-	var chip_on := _pack(GOLD, GOLD_HOVER, GOLD_DEEP, GOLD_DEEP, Color("f6f1e4"), INK_ON_GOLD, Color("6d5a40"), 0)
-	var short := _pack(Color("2a221c"), Color("342c26"), WOOD_PRESS, Color("4a4036"), GOLD, INK_DIM, INK_DIM, 0)
+	var chip := _pack(WOOD, WOOD_HOVER, WOOD_PRESS, BORDER, GOLD, INK_SOFT, Color("8a7a68"), 0)
+	var chip_on := _pack(SAGE_DEEP, SAGE, Color("3a5240"), SAGE, Color("e8f0e4"), INK_SOFT, Color("6d5a40"), 0)
+	var short := _pack(Color("2a221c"), Color("342c26"), WOOD_PRESS, Color("4a4036"), GOLD, Color("9a8b78"), Color("9a8b78"), 0)
+	var soft := _pack(Color("3a4638"), Color("4a5648"), Color("2a3228"), SAGE, SAGE_MIST, INK_SOFT, Color("8a9a88"), 2)
 	_roles = {
 		"quiet": quiet,
 		"primary": primary,
@@ -128,16 +153,17 @@ static func _build() -> void:
 		"chip": chip,
 		"chip_on": chip_on,
 		"short": short,
+		"soft": soft,
 	}
 	var base: Dictionary = quiet["box"]
 	for state in base.keys():
 		theme.set_stylebox(String(state), "Button", base[state])
-	theme.set_color("font_color", "Button", INK)
-	theme.set_color("font_hover_color", "Button", INK)
-	theme.set_color("font_pressed_color", "Button", INK)
-	theme.set_color("font_focus_color", "Button", INK)
-	theme.set_color("font_disabled_color", "Button", INK_DIM)
-	theme.set_color("font_color", "Label", INK)
+	theme.set_color("font_color", "Button", INK_SOFT)
+	theme.set_color("font_hover_color", "Button", INK_SOFT)
+	theme.set_color("font_pressed_color", "Button", INK_SOFT)
+	theme.set_color("font_focus_color", "Button", INK_SOFT)
+	theme.set_color("font_disabled_color", "Button", Color("8a7a68"))
+	theme.set_color("font_color", "Label", INK_SOFT)
 
 static func _pack(normal: Color, hover: Color, pressed: Color, border: Color, focus_border: Color, ink: Color, dim: Color, shadow: int) -> Dictionary:
 	return {
@@ -157,12 +183,12 @@ static func _box(bg: Color, border: Color, width: int, shadow: int) -> StyleBoxF
 	box.bg_color = bg
 	box.border_color = border
 	box.set_border_width_all(width)
-	box.set_corner_radius_all(8)
-	box.content_margin_left = 8
-	box.content_margin_right = 8
-	box.content_margin_top = 4
-	box.content_margin_bottom = 4
-	box.shadow_color = Color(0, 0, 0, 0.38)
+	box.set_corner_radius_all(12)
+	box.content_margin_left = 10
+	box.content_margin_right = 10
+	box.content_margin_top = 6
+	box.content_margin_bottom = 6
+	box.shadow_color = Color(0, 0, 0, 0.32)
 	box.shadow_size = shadow
 	box.shadow_offset = Vector2(0, 1)
 	return box

@@ -1,0 +1,19 @@
+Community props (CC BY 4.0 — credit required)
+
+Sheep
+  Author: Kinga Kroliczek
+  Source: https://sketchfab.com/3d-models/sheep-fb30303a25dc4badad445217600206e5
+  License: https://creativecommons.org/licenses/by/4.0/
+
+Hay Bale
+  Author: ThomasWhalley
+  Source: https://sketchfab.com/3d-models/hay-bale-16f3d0337ad54e92b186d8a6e8494699
+  License: https://creativecommons.org/licenses/by/4.0/
+
+Files: oveja.glb, paca_heno.glb
+Used on Lindero meadow and grain hexes.
+
+Ground scatter (flowers, mixed pebbles, stubble, bushes) is original
+Lindero geometry in hex_dressing.gd.
+
+Grass tuft card: Lindero/art/pasto_mata.png — original painted clump, not a third-party model.

@@ -1,4 +1,4 @@
-extends SceneTree
+﻿extends SceneTree
 
 const GameScript := preload("res://scripts/match.gd")
 const HexGeom := preload("res://scripts/hex_lib.gd")
@@ -8,6 +8,7 @@ func _init() -> void:
 	fails += _test_topology()
 	fails += _test_rules()
 	fails += _test_expansion()
+	fails += _test_dice_faces()
 	fails += _test_full_game()
 	if fails > 0:
 		push_error("Lindero self-test failed: %d" % fails)
@@ -93,28 +94,28 @@ func _test_rules() -> int:
 	for n in g.v_neighbors[spot]:
 		if not g.vertex_blocked(int(n)):
 			return _fail("adjacent vertex stayed open")
-	g.hands = [[0, 0, 0, 0], [0, 0, 0, 0]]
+	g.hands = [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0]]
 	g.produce(6)
 	if int(g.hands[0][spot_res]) < 1:
 		return _fail("roll 6 did not pay the settlement")
-	g.hands = [[0, 0, 0, 0], [0, 0, 0, 0]]
+	g.hands = [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0]]
 	g.produce(7)
 	var total := 0
 	for p in 2:
-		for i in 4:
+		for i in GameScript.RES_COUNT:
 			total += int(g.hands[p][i])
 	if total != 0:
 		return _fail("drought produced resources")
 	err = _finish_setup(g)
 	if err != "":
 		return _fail(err)
-	g.hands = [[0, 0, 0, 0], [0, 0, 0, 0]]
+	g.hands = [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0]]
 	g.forced_roll = 7
 	err = g.roll(0)
 	if err != "" or g.phase != GameScript.Phase.BUILD:
 		return _fail("forced drought roll failed: %s" % err)
 	for p in 2:
-		for i in 4:
+		for i in GameScript.RES_COUNT:
 			if int(g.hands[p][i]) != 0:
 				return _fail("hands changed on a 7")
 	var before: int = g.buildings.size()
@@ -123,7 +124,7 @@ func _test_rules() -> int:
 		return _fail("built a settlement with an empty hand")
 	if g.buildings.size() != before:
 		return _fail("failed build still created a settlement")
-	g.hands[0] = [0, 0, 2, 2]
+	g.hands[0] = [0, 0, 2, 2, 0]
 	var mine := -1
 	for vkey in g.buildings.keys():
 		if int(g.buildings[vkey].player) == 0 and int(g.buildings[vkey].level) == 1:
@@ -170,7 +171,7 @@ func _test_expansion() -> int:
 		return _fail("missing a terrain")
 	g.buildings.clear()
 	g.buildings[int(g.hexes[wood_hex].vertices[0])] = {"player": 0, "level": 2}
-	g.hands = [[0, 0, 0, 0], [0, 0, 0, 0]]
+	g.hands = [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0]]
 	g.wares = [[0, 0, 0], [0, 0, 0]]
 	g.progress = [[3, 0, 0], [0, 0, 0]]
 	_only_number(g, wood_hex, 6)
@@ -178,11 +179,11 @@ func _test_expansion() -> int:
 	if int(g.hands[0][GameScript.Goods.WOOD]) != 1 or int(g.wares[0][GameScript.Ware.PAPER]) != 1:
 		return _fail("wood farm should pay 1 wood + 1 paper, got %s / %s" % [g.hands[0], g.wares[0]])
 	g.buildings.clear()
-	g.hands = [[1, 2, 0, 3], [0, 0, 0, 0]]
+	g.hands = [[1, 2, 0, 3, 0], [0, 0, 0, 0, 0]]
 	g.produce(6)
 	if int(g.hands[0][GameScript.Goods.GRAIN]) != 1:
 		return _fail("acequia should grant the scarcest prima")
-	g.hands = [[0, 0, 0, 0], [0, 0, 0, 0]]
+	g.hands = [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0]]
 	g.wares = [[0, 0, 0], [0, 0, 0]]
 	g.produce(7)
 	if int(g.hands[0][0]) != 0:
@@ -191,7 +192,7 @@ func _test_expansion() -> int:
 	_only_number(g, clay_hex, 9)
 	g.produce(9)
 	var clay_sum := 0
-	for i in 4:
+	for i in GameScript.RES_COUNT:
 		clay_sum += int(g.hands[0][i])
 	if int(g.hands[0][GameScript.Goods.CLAY]) != 2 or clay_sum != 2:
 		return _fail("clay farm should pay exactly 2 clay, got %s" % g.hands[0])
@@ -200,7 +201,7 @@ func _test_expansion() -> int:
 			return _fail("clay farm paid a commodity")
 	g.buildings.clear()
 	g.buildings[int(g.hexes[grain_hex].vertices[0])] = {"player": 0, "level": 2}
-	g.hands = [[0, 0, 0, 0], [0, 0, 0, 0]]
+	g.hands = [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0]]
 	g.progress = [[0, 0, 0], [0, 0, 0]]
 	_only_number(g, grain_hex, 5)
 	g.produce(5)
@@ -209,7 +210,7 @@ func _test_expansion() -> int:
 	g.buildings.clear()
 	g.buildings[int(g.hexes[stone_hex].vertices[0])] = {"player": 0, "level": 2}
 	g.wares = [[0, 0, 0], [0, 0, 0]]
-	g.hands = [[0, 0, 0, 0], [0, 0, 0, 0]]
+	g.hands = [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0]]
 	_only_number(g, stone_hex, 8)
 	g.produce(8)
 	if int(g.wares[0][GameScript.Ware.COIN]) != 1 or int(g.hands[0][GameScript.Goods.STONE]) != 1:
@@ -238,7 +239,7 @@ func _test_expansion() -> int:
 	if int(road[GameScript.Goods.WOOD]) != 0 or int(road[GameScript.Goods.CLAY]) != 1:
 		return _fail("scaffold road cost %s" % road)
 	g.progress[0][GameScript.Track.MERCADO] = 1
-	g.hands[0] = [4, 0, 0, 0]
+	g.hands[0] = [4, 0, 0, 0, 0]
 	err = g.trade(0, GameScript.Goods.WOOD, GameScript.Goods.GRAIN, false)
 	if err != "" or int(g.hands[0][0]) != 0 or int(g.hands[0][2]) != 1:
 		return _fail("4:1 trade failed: %s %s" % [err, g.hands[0]])
@@ -274,6 +275,48 @@ func _test_expansion() -> int:
 		return _fail("ai should buy taller, got %s" % action)
 	return 0
 
+## La animación de dados solo presenta die_a/die_b; la lógica debe dar caras coherentes.
+func _test_dice_faces() -> int:
+	var g = GameScript.new()
+	g.new_game()
+	var err := _finish_setup(g)
+	if err != "":
+		return _fail(err)
+	for total in range(2, 13):
+		if g.phase != GameScript.Phase.ROLL:
+			err = g.end_turn(g.current_player)
+			if err != "":
+				return _fail("end_turn before forced %d: %s" % [total, err])
+		var p: int = g.current_player
+		g.forced_roll = total
+		err = g.roll(p)
+		if err != "":
+			return _fail("forced roll %d: %s" % [total, err])
+		if g.last_roll != total:
+			return _fail("last_roll %d != forced %d" % [g.last_roll, total])
+		if g.die_a < 1 or g.die_a > 6 or g.die_b < 1 or g.die_b > 6:
+			return _fail("faces out of range on %d: %d+%d" % [total, g.die_a, g.die_b])
+		if g.die_a + g.die_b != g.last_roll:
+			return _fail("faces %d+%d != total %d" % [g.die_a, g.die_b, g.last_roll])
+		err = g.end_turn(p)
+		if err != "":
+			return _fail("end_turn after %d: %s" % [total, err])
+	for _i in 24:
+		if g.phase != GameScript.Phase.ROLL:
+			err = g.end_turn(g.current_player)
+			if err != "":
+				return _fail(err)
+		var p2: int = g.current_player
+		err = g.roll(p2)
+		if err != "":
+			return _fail(err)
+		if g.die_a + g.die_b != g.last_roll:
+			return _fail("free roll faces %d+%d != %d" % [g.die_a, g.die_b, g.last_roll])
+		err = g.end_turn(p2)
+		if err != "":
+			return _fail(err)
+	return 0
+
 func _test_full_game() -> int:
 	seed(14014)
 	var g = GameScript.new()
@@ -282,7 +325,7 @@ func _test_full_game() -> int:
 	if err != "":
 		return _fail(err)
 	for p in 2:
-		g.hands[p] = [12, 12, 12, 12]
+		g.hands[p] = [12, 12, 12, 12, 12]
 	var guard := 0
 	while g.phase != GameScript.Phase.OVER and guard < 80:
 		guard += 1
@@ -300,7 +343,7 @@ func _test_full_game() -> int:
 		if err != "":
 			return _fail("%s | %s" % [err, "\n".join(g.log)])
 		for q in 2:
-			for i in 4:
+			for i in GameScript.RES_COUNT:
 				if int(g.hands[q][i]) < 0:
 					return _fail("negative resources")
 			for i in 3:
@@ -311,3 +354,4 @@ func _test_full_game() -> int:
 	if g.phase != GameScript.Phase.OVER or g.winner < 0 or g.scores[g.winner] < GameScript.WIN:
 		return _fail("no winner scores %s log %s" % [str(g.scores), " / ".join(g.log)])
 	return 0
+

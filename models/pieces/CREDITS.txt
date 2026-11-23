@@ -1,0 +1,12 @@
+Player pieces (pueblo, ciudad, camino)
+
+Mesh source: Settlement / City / Road from
+"Catan (set completo)" by Mario Covarrubias Navarro (BowhunterMX)
+https://www.crealitycloud.com/es/model-detail/catan-complete-set
+License: CC BY-SA 4.0 — attribution + share alike.
+Source file: Juego Jugador.3mf (part 1).
+
+Restyle (original to Lindero): plaster walls, wood roofs tinted in
+Godot to player color (d97706 / 2563eb). Crossing discs unused.
+
+Do not ship jpdesign (CC BY-NC-SA) or Cults print-only packs.

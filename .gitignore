@@ -1,7 +1,33 @@
+# Godot
 .godot/
 *.translation
 export/
+.import/
+
+# OS
 .DS_Store
 Thumbs.db
+desktop.ini
 *.tmp
 ~*
+
+# Logs y capturas de debug (no hacen falta para jugar)
+*.log
+godot_run_err.txt
+tmp_*
+debug_captures/
+screen_capture.png
+screen_capture.png.import
+godot_game_window.png
+godot_game_window.png.import
+tablero_con_piezas.png
+tablero_con_piezas.png.import
+test_glb_refined.png
+test_glb_refined.png.import
+test_tripo_integrated.png
+test_tripo_integrated.png.import
+
+# Material de trabajo interno (no necesario para abrir el juego)
+art/tripo-inbox/
+art/descargas/
+art_src/

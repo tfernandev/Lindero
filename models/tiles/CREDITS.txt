@@ -1,0 +1,42 @@
+Hex tiles (hex_madera, hex_arcilla, hex_grano, hex_ovejas, hex_piedra)
+
+Forest / clay / sheep hex meshes:
+  "Catan (set completo)" by Mario Covarrubias Navarro (BowhunterMX)
+  https://www.crealitycloud.com/es/model-detail/catan-complete-set
+  License: CC BY-SA 4.0 — attribution + share alike.
+  Source files: wood.3mf, brick.3mf, sheep.stl (part 1).
+  Restyle: Lindero terrain albedo on Top, wood sides, fitted to
+  pointy-top HexGeom.SIZE=90. One unique hex kept per plate.
+
+Wheat / grain hex (hex_grano):
+  "Catan Tiles grain/Dessert and harbor pieces" by Jaimz079
+  https://www.printables.com/model/926286-catan-tiles-graindessert-and-harbor-pieces
+  Source: Grain with windmill.stl. Fitted to HexGeom.SIZE=90.
+  Wheat field = grain albedo; Mill / MillRoof / Blades = mill textures;
+  Hay = straw bake on the second mound; Side = wood.
+  Mill albedo maps (CC0 Poly Haven): wood_floor, roof_09; sails = local canvas bake
+  in art/props/molino_{madera,tejas,lona}.jpg; hay = art/props/fardo_paja.jpg.
+
+Mountain / stone hex (hex_piedra):
+  "Catan + Cities & Knight + Seafarers" by MioPrint
+  https://www.printables.com/model/72175-catan-cities-knight-seafarers
+  License: CC0. Source: Ore (mountain).stl.
+  Fitted to HexGeom.SIZE=90.
+
+Lagoon stays the painted hex. Desert dunes from the Creality pack
+are unused. Do not ship jpdesign (CC BY-NC-SA) or Cults print-only packs.
+
+hex_piedra_v2.glb (en uso para piedra): original de Lindero, generado con
+  tools/blender/hex_piedra.py (Blender 5.1): relieve calculado a partir de
+  art/terreno_piedra.jpg (arte propio) + rocas 3D procedurales.
+  Roca principal: "Boulder 01" de Poly Haven, por Rico Cilliers, licencia CC0
+  (https://polyhaven.com/a/boulder_01). Decimada a 1.8k tris y retonalizada
+  a la paleta de la pintura. Fuente sin modificar en art_src/polyhaven/boulder_01.
+  hex_piedra.glb (MioPrint, CC0) queda sin uso.
+
+hex_piedra_roca.glb (variante, solo casilla 0,1; ver HEX_TILE_AT en
+  scripts/table_board.gd): generada con tools/blender/hex_piedra_roca.py.
+  Terreno igual a hex_piedra_v2. Roca: "Boulder 01" de Poly Haven, por Rico
+  Cilliers, CC0 (https://polyhaven.com/a/boulder_01): malla original reducida
+  a 2.6k tris con texturas originales horneadas (difusa, normal, ARM 1K).
+  Proyecto editable: art_src/blender/hex_piedra_roca.blend.
